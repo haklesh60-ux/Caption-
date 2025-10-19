@@ -6,13 +6,12 @@ Telegram Bot - Multi File + Channel ID + Caption Replace
 - /id in channel → show channel id automatically
 - Accepts multiple videos or PDFs (up to 100)
 - Sends to channel in same order as received
-- Webhook ready for Render deployment
 """
 
 import os
 import re
 import logging
-from telegram import Update
+from telegram import Update, Chat
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
     ContextTypes, ConversationHandler, filters
@@ -30,11 +29,10 @@ logger = logging.getLogger(__name__)
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
 
+    # If used inside a channel — just show ID
     if chat.type in ["channel", "supergroup"]:
-        await context.bot.send_message(
-            chat_id=chat.id,
-            text=f"📢 Channel Name: {chat.title}\n🆔 Channel ID: `{chat.id}`",
-            parse_mode="Markdown"
+        await update.message.reply_text(
+            f"📢 Channel Name: {chat.title}\n🆔 Channel ID: `{chat.id}`"
         )
         return ConversationHandler.END
 
@@ -78,6 +76,7 @@ async def collect_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = context.user_data
     queue = data.get("queue", [])
 
+    # store media info
     media_item = {
         "video": update.message.video.file_id if update.message.video else None,
         "document": update.message.document.file_id if update.message.document else None,
@@ -96,9 +95,9 @@ async def collect_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def upload_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = context.user_data
     queue = data.get("queue", [])
-    remove_word = data.get("remove_word", "")
-    add_word = data.get("add_word", "")
-    channel = data.get("channel", "")
+    remove_word = data.get("remove_word")
+    add_word = data.get("add_word")
+    channel = data.get("channel")
 
     if not queue:
         await update.message.reply_text("⚠️ कोई video या PDF नहीं मिली।")
@@ -125,28 +124,13 @@ async def upload_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ---------------- Channel ID command -----------------
 async def channel_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat = update.effective_chat
-    try:
-        await context.bot.send_message(
-            chat_id=chat.id,
-            text=f"📢 Channel Name: {chat.title}\n🆔 Channel ID: `{chat.id}`",
-            parse_mode="Markdown"
-        )
-    except Exception:
-        await context.bot.send_message(
-            chat_id=chat.id,
-            text=f"🆔 Channel ID: `{chat.id}`",
-            parse_mode="Markdown"
-        )
+    chat: Chat = update.effective_chat
+    await update.message.reply_text(f"📢 Channel Name: {chat.title}\n🆔 Channel ID: `{chat.id}`")
 
 
 # ---------------- MAIN -----------------
 def main():
-    token = os.getenv("BOT_TOKEN")
-    if not token:
-        raise ValueError("BOT_TOKEN not found in environment variables!")
-
-    app = ApplicationBuilder().token(token).build()
+    app = ApplicationBuilder().token(os.getenv("BOT_TOKEN")).build()
 
     conv = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
@@ -164,21 +148,7 @@ def main():
 
     app.add_handler(conv)
     app.add_handler(CommandHandler("id", channel_id))
-
-    # ---------------- Webhook for Render -----------------
-    RENDER_URL = os.getenv("RENDER_EXTERNAL_URL")
-    PORT = int(os.environ.get("PORT", 5000))
-
-    if RENDER_URL:
-        # Use webhook
-        app.run_webhook(
-            listen="0.0.0.0",
-            port=PORT,
-            webhook_url=f"{RENDER_URL}/webhook"
-        )
-    else:
-        # Local testing / polling
-        app.run_polling(allowed_updates=Update.ALL_TYPES)
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
 if __name__ == "__main__":
