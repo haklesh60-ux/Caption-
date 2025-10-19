@@ -3,7 +3,7 @@
 Telegram Bot - Multi File + Channel ID + Caption Replace
 ✅ Features:
 - /start in DM → setup remove/add word & channel
-- /id in channel → show channel id automatically
+- /id in channel → show channel id automatically (even if no reply possible)
 - Accepts multiple videos or PDFs (up to 100)
 - Sends to channel in same order as received
 """
@@ -11,7 +11,7 @@ Telegram Bot - Multi File + Channel ID + Caption Replace
 import os
 import re
 import logging
-from telegram import Update, Chat
+from telegram import Update
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
     ContextTypes, ConversationHandler, filters
@@ -31,8 +31,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # If used inside a channel — just show ID
     if chat.type in ["channel", "supergroup"]:
-        await update.message.reply_text(
-            f"📢 Channel Name: {chat.title}\n🆔 Channel ID: `{chat.id}`"
+        await context.bot.send_message(
+            chat_id=chat.id,
+            text=f"📢 Channel Name: {chat.title}\n🆔 Channel ID: `{chat.id}`",
+            parse_mode="Markdown"
         )
         return ConversationHandler.END
 
@@ -95,9 +97,9 @@ async def collect_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def upload_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = context.user_data
     queue = data.get("queue", [])
-    remove_word = data.get("remove_word")
-    add_word = data.get("add_word")
-    channel = data.get("channel")
+    remove_word = data.get("remove_word", "")
+    add_word = data.get("add_word", "")
+    channel = data.get("channel", "")
 
     if not queue:
         await update.message.reply_text("⚠️ कोई video या PDF नहीं मिली।")
@@ -124,13 +126,29 @@ async def upload_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ---------------- Channel ID command -----------------
 async def channel_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat: Chat = update.effective_chat
-    await update.message.reply_text(f"📢 Channel Name: {chat.title}\n🆔 Channel ID: `{chat.id}`")
+    chat = update.effective_chat
+    try:
+        await context.bot.send_message(
+            chat_id=chat.id,
+            text=f"📢 Channel Name: {chat.title}\n🆔 Channel ID: `{chat.id}`",
+            parse_mode="Markdown"
+        )
+    except Exception:
+        # If message is None (in channel post), send via bot directly
+        await context.bot.send_message(
+            chat_id=chat.id,
+            text=f"🆔 Channel ID: `{chat.id}`",
+            parse_mode="Markdown"
+        )
 
 
 # ---------------- MAIN -----------------
 def main():
-    app = ApplicationBuilder().token(os.getenv("BOT_TOKEN")).build()
+    token = os.getenv("BOT_TOKEN")
+    if not token:
+        raise ValueError("BOT_TOKEN not found in environment variables!")
+
+    app = ApplicationBuilder().token(token).build()
 
     conv = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
