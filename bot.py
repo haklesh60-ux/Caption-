@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Telegram Bot - Auto Upload Videos/PDFs to Channel
+Telegram Bot - Flood-Safe Auto Upload Videos/PDFs
 ✅ Features:
 - /start → setup remove/add word & channel ID
 - Auto upload media sent to bot
-- Flood control handled (1 sec delay per file)
+- Flood control fully handled (RetryAfter)
 - Uploaded media deleted from bot
 - Metadata (remove/add word + channel) saved, media not stored
 """
@@ -18,6 +18,7 @@ from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
     ContextTypes, ConversationHandler, filters
 )
+from telegram.error import RetryAfter, TelegramError
 
 # States
 ASK_REMOVE, ASK_ADD, ASK_CHANNEL = range(3)
@@ -69,7 +70,30 @@ async def ask_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return ConversationHandler.END
 
-# ---------------- Auto-upload media -----------------
+# ---------------- Flood-safe send -----------------
+async def send_media_safe(context, chat_id, video=None, document=None, caption=""):
+    """
+    Send media to Telegram channel safely with adaptive flood control
+    """
+    while True:
+        try:
+            if video:
+                await context.bot.send_video(chat_id=chat_id, video=video, caption=caption)
+            elif document:
+                await context.bot.send_document(chat_id=chat_id, document=document, caption=caption)
+            break  # Success
+        except RetryAfter as e:
+            wait_time = e.retry_after
+            print(f"⚠️ Flood limit reached. Waiting {wait_time} seconds...")
+            await asyncio.sleep(wait_time + 1)  # buffer
+        except TelegramError as e:
+            print(f"❌ Telegram error: {e}")
+            break
+        except Exception as e:
+            print(f"❌ Unknown error: {e}")
+            break
+
+# ---------------- Handle incoming media -----------------
 async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = context.user_data
     remove_word = data.get("remove_word")
@@ -77,7 +101,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     channel = data.get("channel")
 
     if not channel:
-        await update.message.reply_text("⚠️ Channel ID सेट नहीं है। /start चलाकर setup करें।")
+        await update.message.reply_text("⚠️ Channel ID not set. Run /start first.")
         return
 
     caption = update.message.caption or ""
@@ -85,15 +109,12 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         if update.message.video:
-            await context.bot.send_video(chat_id=channel, video=update.message.video.file_id, caption=caption)
+            await send_media_safe(context, channel, video=update.message.video.file_id, caption=caption)
         elif update.message.document:
-            await context.bot.send_document(chat_id=channel, document=update.message.document.file_id, caption=caption)
-        
-        # Delete original message from bot
-        await update.message.delete()
+            await send_media_safe(context, channel, document=update.message.document.file_id, caption=caption)
 
-        # Flood control delay
-        await asyncio.sleep(1)
+        # Delete original media from bot
+        await update.message.delete()
     except Exception as e:
         await update.message.reply_text(f"❌ Error uploading media: {e}")
 
