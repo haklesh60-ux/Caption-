@@ -1,23 +1,26 @@
 #!/usr/bin/env python3
 """
-Telegram Bot - Multi File + Channel ID + Caption Replace
+Telegram Bot - Auto Upload Videos/PDFs to Channel
 ✅ Features:
-- /start in DM → setup remove/add word & channel
-- /id in channel → show channel id automatically
-- Accepts multiple videos or PDFs (up to 100)
-- Sends to channel in same order as received
+- /start → setup remove/add word & channel ID
+- Auto upload media sent to bot
+- Flood control handled (1 sec delay per file)
+- Uploaded media deleted from bot
+- Metadata (remove/add word + channel) saved, media not stored
 """
 
 import os
 import re
 import logging
-from telegram import Update, Chat
+import asyncio
+from telegram import Update
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
     ContextTypes, ConversationHandler, filters
 )
 
-ASK_REMOVE, ASK_ADD, ASK_CHANNEL, ASK_MEDIA = range(4)
+# States
+ASK_REMOVE, ASK_ADD, ASK_CHANNEL = range(3)
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -37,18 +40,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
     await update.message.reply_text(
-        "👋 नमस्ते! मैं caption से कोई word हटाकर नया word डाल सकता हूँ और वही फ़ाइल आपके channel पर भेज दूँ।\n\n"
+        "👋 नमस्ते! मैं caption से कोई word हटाकर नया word डाल सकता हूँ और media आपके channel पर भेज दूँ।\n\n"
         "सबसे पहले वो word भेजिए जो हटाना है (उदाहरण: @OldName)"
     )
     return ASK_REMOVE
-
 
 # ---------------- Step 1 -----------------
 async def ask_remove(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["remove_word"] = update.message.text.strip()
     await update.message.reply_text("✅ हटाने वाला word मिला!\nअब वो word भेजिए जो उसकी जगह डालना है।")
     return ASK_ADD
-
 
 # ---------------- Step 2 -----------------
 async def ask_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -59,76 +60,49 @@ async def ask_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return ASK_CHANNEL
 
-
 # ---------------- Step 3 -----------------
 async def ask_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["channel"] = update.message.text.strip()
-    context.user_data["queue"] = []
     await update.message.reply_text(
-        "✅ Channel ID सेट हो गई!\nअब आप जितनी चाहें videos या PDFs (100 तक) भेजिए।\n"
+        "✅ Channel ID सेट हो गई!\nअब आप जितनी चाहें videos या PDFs भेजिए।\n"
         "मैं सबको उसी क्रम में आपके channel पर भेज दूँ।"
     )
-    return ASK_MEDIA
+    return ConversationHandler.END
 
-
-# ---------------- Step 4: Collect media -----------------
-async def collect_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ---------------- Auto-upload media -----------------
+async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = context.user_data
-    queue = data.get("queue", [])
-
-    # store media info
-    media_item = {
-        "video": update.message.video.file_id if update.message.video else None,
-        "document": update.message.document.file_id if update.message.document else None,
-        "caption": update.message.caption or ""
-    }
-
-    queue.append(media_item)
-    context.user_data["queue"] = queue
-
-    await update.message.reply_text(f"📦 जोड़ा गया ({len(queue)} files total)\n"
-                                    "जब सब भेज दो, तब /upload लिखो।")
-    return ASK_MEDIA
-
-
-# ---------------- Step 5: Upload all -----------------
-async def upload_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    data = context.user_data
-    queue = data.get("queue", [])
     remove_word = data.get("remove_word")
     add_word = data.get("add_word")
     channel = data.get("channel")
 
-    if not queue:
-        await update.message.reply_text("⚠️ कोई video या PDF नहीं मिली।")
-        return ASK_MEDIA
+    if not channel:
+        await update.message.reply_text("⚠️ Channel ID सेट नहीं है। /start चलाकर setup करें।")
+        return
 
-    await update.message.reply_text(f"🚀 Upload शुरू — {len(queue)} files भेजी जा रही हैं...")
+    caption = update.message.caption or ""
+    caption = re.sub(re.escape(remove_word), add_word, caption)
 
-    count = 0
-    for item in queue:
-        caption = re.sub(re.escape(remove_word), add_word, item["caption"])
-        try:
-            if item["video"]:
-                await context.bot.send_video(chat_id=channel, video=item["video"], caption=caption)
-            elif item["document"]:
-                await context.bot.send_document(chat_id=channel, document=item["document"], caption=caption)
-            count += 1
-        except Exception as e:
-            await update.message.reply_text(f"❌ Error on file {count+1}: {e}")
+    try:
+        if update.message.video:
+            await context.bot.send_video(chat_id=channel, video=update.message.video.file_id, caption=caption)
+        elif update.message.document:
+            await context.bot.send_document(chat_id=channel, document=update.message.document.file_id, caption=caption)
+        
+        # Delete original message from bot
+        await update.message.delete()
 
-    await update.message.reply_text(f"✅ Upload पूरा! {count}/{len(queue)} files भेज दी गईं।")
-    data["queue"].clear()
-    return ConversationHandler.END
-
+        # Flood control delay
+        await asyncio.sleep(1)
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error uploading media: {e}")
 
 # ---------------- Channel ID command -----------------
 async def channel_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat: Chat = update.effective_chat
+    chat = update.effective_chat
     await update.message.reply_text(f"📢 Channel Name: {chat.title}\n🆔 Channel ID: `{chat.id}`")
 
-
-# ---------------- MAIN -----------------
+# ---------------- Main -----------------
 def main():
     app = ApplicationBuilder().token(os.getenv("BOT_TOKEN")).build()
 
@@ -138,18 +112,16 @@ def main():
             ASK_REMOVE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_remove)],
             ASK_ADD: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_add)],
             ASK_CHANNEL: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_channel)],
-            ASK_MEDIA: [
-                MessageHandler(filters.VIDEO | filters.Document.ALL, collect_media),
-                CommandHandler("upload", upload_all),
-            ],
         },
         fallbacks=[],
     )
 
     app.add_handler(conv)
     app.add_handler(CommandHandler("id", channel_id))
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    # Media handler
+    app.add_handler(MessageHandler(filters.VIDEO | filters.Document.ALL, handle_media))
 
+    app.run_polling(allowed_updates=None)  # Polling mode
 
 if __name__ == "__main__":
     main()
