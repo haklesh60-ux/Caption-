@@ -114,7 +114,7 @@ def main():
     )
 
     app.add_handler(conv)
-    app.run_polling()
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
 if __name__ == "__main__":
