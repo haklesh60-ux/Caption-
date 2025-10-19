@@ -3,9 +3,10 @@
 Telegram Bot - Multi File + Channel ID + Caption Replace
 ✅ Features:
 - /start in DM → setup remove/add word & channel
-- /id in channel → show channel id automatically (even if no reply possible)
+- /id in channel → show channel id automatically
 - Accepts multiple videos or PDFs (up to 100)
 - Sends to channel in same order as received
+- Webhook ready for Render deployment
 """
 
 import os
@@ -29,7 +30,6 @@ logger = logging.getLogger(__name__)
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
 
-    # If used inside a channel — just show ID
     if chat.type in ["channel", "supergroup"]:
         await context.bot.send_message(
             chat_id=chat.id,
@@ -78,7 +78,6 @@ async def collect_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = context.user_data
     queue = data.get("queue", [])
 
-    # store media info
     media_item = {
         "video": update.message.video.file_id if update.message.video else None,
         "document": update.message.document.file_id if update.message.document else None,
@@ -134,7 +133,6 @@ async def channel_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown"
         )
     except Exception:
-        # If message is None (in channel post), send via bot directly
         await context.bot.send_message(
             chat_id=chat.id,
             text=f"🆔 Channel ID: `{chat.id}`",
@@ -166,7 +164,21 @@ def main():
 
     app.add_handler(conv)
     app.add_handler(CommandHandler("id", channel_id))
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+
+    # ---------------- Webhook for Render -----------------
+    RENDER_URL = os.getenv("RENDER_EXTERNAL_URL")
+    PORT = int(os.environ.get("PORT", 5000))
+
+    if RENDER_URL:
+        # Use webhook
+        app.run_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            webhook_url=f"{RENDER_URL}/webhook"
+        )
+    else:
+        # Local testing / polling
+        app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
 if __name__ == "__main__":
